@@ -2,11 +2,28 @@
 set -e
 
 # GammaCode Installation Script
-# Usage: curl -fsSL https://install.gammacode.dev | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/Zenprenuers/GammaCode-Releases/main/install.sh | bash
+# 
+# Environment variables:
+#   VERSION                 - Specific version to install (default: v1.0.0)
+#   GAMMACODE_INSTALL_DIR   - Custom installation directory
+#   XDG_BIN_DIR            - XDG-compliant binary directory
 
 REPO="Zenprenuers/GammaCode-Releases"
 BINARY_NAME="gammacode"
-INSTALL_DIR="/usr/local/bin"
+# Installation directory - respects user preferences
+if [ -n "${GAMMACODE_INSTALL_DIR:-}" ]; then
+    INSTALL_DIR="$GAMMACODE_INSTALL_DIR"
+elif [ -n "${XDG_BIN_DIR:-}" ]; then
+    INSTALL_DIR="$XDG_BIN_DIR"
+elif [ -d "$HOME/bin" ] || mkdir -p "$HOME/bin" 2>/dev/null; then
+    INSTALL_DIR="$HOME/bin"
+else
+    INSTALL_DIR="$HOME/.gammacode/bin"
+fi
+
+# Ensure install directory exists
+mkdir -p "$INSTALL_DIR" 2>/dev/null || true
 
 # Colors for output
 RED='\033[0;31m'
@@ -71,15 +88,14 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-# Get latest version from GitHub releases
+# Get latest version (hardcoded since you're using direct file hosting)
 get_latest_version() {
-    local version
-    version=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    # Since you're hosting binaries directly in the repo structure,
+    # we'll default to v1.0.0 but allow override via VERSION env var
+    local version="v1.0.0"
     
-    if [ -z "$version" ]; then
-        log_error "Failed to get latest version"
-        exit 1
-    fi
+    # You could also try to fetch this from a version file in your repo:
+    # version=$(curl -s "https://raw.githubusercontent.com/${REPO}/main/releases/latest/version.txt" 2>/dev/null || echo "v1.0.0")
     
     echo "$version"
 }
@@ -101,52 +117,34 @@ install_binary() {
     temp_dir=$(mktemp -d)
     cd "$temp_dir"
     
-    # Determine file extension
-    local file_ext="tar.gz"
+    # Determine binary name and URL based on platform
     local binary_name="$BINARY_NAME"
+    local download_url
+    
     if [[ "$platform" == "windows-"* ]]; then
-        file_ext="zip"
         binary_name="${BINARY_NAME}.exe"
     fi
     
-    # Download archive
-    local archive_name="${BINARY_NAME}-${platform}.${file_ext}"
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
+    # Download directly from GitHub raw content
+    download_url="https://raw.githubusercontent.com/${REPO}/main/releases/latest/${version}/${binary_name}"
     
     log_info "Downloading from: $download_url"
     
-    if ! curl -L -o "$archive_name" "$download_url"; then
-        log_error "Failed to download $archive_name"
+    if ! curl -L -o "$binary_name" "$download_url"; then
+        log_error "Failed to download $binary_name"
         exit 1
     fi
     
-    # Extract archive
-    if [[ "$file_ext" == "zip" ]]; then
-        unzip -q "$archive_name"
-    else
-        tar -xzf "$archive_name"
-    fi
-    
-    # Find the binary
-    local binary_path
-    if [ -f "${BINARY_NAME}-${platform}/bin/${binary_name}" ]; then
-        binary_path="${BINARY_NAME}-${platform}/bin/${binary_name}"
-    elif [ -f "bin/${binary_name}" ]; then
-        binary_path="bin/${binary_name}"
-    elif [ -f "$binary_name" ]; then
-        binary_path="$binary_name"
-    else
-        log_error "Binary not found in archive"
-        exit 1
-    fi
+    # Make binary executable
+    chmod +x "$binary_name"
     
     # Install binary
     if [ -w "$INSTALL_DIR" ]; then
-        cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+        cp "$binary_name" "$INSTALL_DIR/$BINARY_NAME"
         chmod +x "$INSTALL_DIR/$BINARY_NAME"
     else
         log_info "Installing to $INSTALL_DIR (requires sudo)"
-        sudo cp "$binary_path" "$INSTALL_DIR/$BINARY_NAME"
+        sudo cp "$binary_name" "$INSTALL_DIR/$BINARY_NAME"
         sudo chmod +x "$INSTALL_DIR/$BINARY_NAME"
     fi
     
@@ -155,6 +153,46 @@ install_binary() {
     rm -rf "$temp_dir"
     
     log_success "GammaCode $version installed successfully!"
+}
+
+# Add to PATH if needed
+setup_path() {
+    # Skip if already in PATH
+    if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+        return 0
+    fi
+    
+    # Detect shell and config file
+    local current_shell config_file
+    current_shell=$(basename "$SHELL" 2>/dev/null || echo "bash")
+    
+    case $current_shell in
+        fish)
+            config_file="$HOME/.config/fish/config.fish"
+            if [ -f "$config_file" ]; then
+                echo "fish_add_path $INSTALL_DIR" >> "$config_file"
+                log_info "Added $INSTALL_DIR to PATH in $config_file"
+            fi
+            ;;
+        zsh)
+            for config_file in "$HOME/.zshrc" "$HOME/.zprofile"; do
+                if [ -f "$config_file" ]; then
+                    echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$config_file"
+                    log_info "Added $INSTALL_DIR to PATH in $config_file"
+                    break
+                fi
+            done
+            ;;
+        bash|*)
+            for config_file in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+                if [ -f "$config_file" ]; then
+                    echo "export PATH=\"$INSTALL_DIR:\$PATH\"" >> "$config_file"
+                    log_info "Added $INSTALL_DIR to PATH in $config_file"
+                    break
+                fi
+            done
+            ;;
+    esac
 }
 
 # Verify installation
@@ -166,7 +204,8 @@ verify_installation() {
         log_info "Try running: $BINARY_NAME --help"
     else
         log_warn "Binary installed but not found in PATH"
-        log_info "You may need to restart your shell or add $INSTALL_DIR to your PATH"
+        log_info "You may need to restart your shell or run: source ~/.bashrc"
+        log_info "Or add $INSTALL_DIR to your PATH manually"
     fi
 }
 
@@ -209,6 +248,9 @@ main() {
     
     # Install binary
     install_binary "$platform" "$version"
+    
+    # Setup PATH
+    setup_path
     
     # Verify installation
     verify_installation
